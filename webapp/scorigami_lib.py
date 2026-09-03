@@ -362,6 +362,49 @@ def compute_top_scores(matches: list, n: int = 5) -> list:
     ]
 
 
+def compute_top_partners(matches: list, n: int = 5) -> list:
+    """
+    The N doubles partners this player has teamed up with most often, most
+    common first. Counts every doubles match on record (win, loss, or
+    default) since this is about who they played alongside, not the score
+    -- ties break by earliest first occurrence so the order is stable.
+    """
+    counts = {}
+    wins = {}
+    first_seen = {}
+    last_seen = {}
+    for m in matches:
+        if not m.get("is_doubles"):
+            continue
+        partner = (m.get("partner") or "").strip()
+        if not partner:
+            continue
+        counts[partner] = counts.get(partner, 0) + 1
+        if m.get("wl") == "W":
+            wins[partner] = wins.get(partner, 0) + 1
+        if partner not in first_seen or m["date"] < first_seen[partner]:
+            first_seen[partner] = m["date"]
+        if partner not in last_seen or m["date"] > last_seen[partner]:
+            last_seen[partner] = m["date"]
+
+    ranked = sorted(
+        counts.items(),
+        key=lambda kv: (-kv[1], first_seen[kv[0]]),
+    )[:n]
+
+    return [
+        {
+            "partner": partner,
+            "count": count,
+            "wins": wins.get(partner, 0),
+            "losses": count - wins.get(partner, 0),
+            "first_date": first_seen[partner].isoformat(),
+            "last_date": last_seen[partner].isoformat(),
+        }
+        for partner, count in ranked
+    ]
+
+
 def build_report(player: str, start_year: int, end_year: int) -> dict:
     matches, fetched_years, errors = collect_all_years(player, start_year, end_year)
 
@@ -379,6 +422,7 @@ def build_report(player: str, start_year: int, end_year: int) -> dict:
     scored = [m for m in matches if m["pattern"] is not None]
     scorigami = [m for m in matches if m["is_scorigami"]]
     top_scores = compute_top_scores(matches, n=5)
+    top_partners = compute_top_partners(matches, n=5)
 
     years_with_data = sorted(y for y, n in fetched_years.items() if n > 0)
     first_year = years_with_data[0] if years_with_data else start_year
@@ -420,6 +464,7 @@ def build_report(player: str, start_year: int, end_year: int) -> dict:
         "fetch_errors": errors,
         "grids": grids,
         "top_scores": top_scores,
+        "top_partners": top_partners,
         "summary": {
             "claimed": claimed,
             "universe": universe,

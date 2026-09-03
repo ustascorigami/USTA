@@ -303,6 +303,15 @@
   }
   .legend button:hover { color: var(--ink); border-color: var(--muted); }
 
+  .top-panels {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin-bottom: 32px;
+  }
+  @media (max-width: 760px) {
+    .top-panels { grid-template-columns: 1fr; }
+  }
   .top-scores {
     background: var(--surface);
     border: 1px solid var(--line);
@@ -311,6 +320,7 @@
     box-shadow: var(--shadow);
     margin-bottom: 32px;
   }
+  .top-panels .top-scores { margin-bottom: 0; }
   .top-scores h2 {
     font-family: "Oswald", system-ui, sans-serif;
     font-weight: 500;
@@ -356,6 +366,7 @@
   }
   .top-wl.W { color: var(--court); background: color-mix(in srgb, var(--court) 16%, transparent); }
   .top-wl.L { color: var(--clay-ink); background: color-mix(in srgb, var(--clay) 16%, transparent); }
+  .top-wl.record { color: var(--ink-2); background: var(--never-fill); }
   .top-count {
     font-family: "IBM Plex Mono", ui-monospace, monospace;
     font-size: 13px;
@@ -520,10 +531,17 @@
       <button type="button" id="downloadCsv">Download match log (CSV)</button>
     </div>
 
-    <div class="top-scores">
-      <h2>Most Common Scores</h2>
-      <p class="sub">The 5 score lines this player has posted most often.</p>
-      <div id="topScoresList"></div>
+    <div class="top-panels">
+      <div class="top-scores">
+        <h2>Most Common Scores</h2>
+        <p class="sub">The 5 score lines this player has posted most often.</p>
+        <div id="topScoresList"></div>
+      </div>
+      <div class="top-scores" id="topPartnersPanel">
+        <h2>Top Doubles Partners</h2>
+        <p class="sub">The 5 partners this player has teamed up with most often.</p>
+        <div id="topPartnersList"></div>
+      </div>
     </div>
 
     <div class="panels">
@@ -682,6 +700,34 @@ function renderReport(report) {
         <span class="top-count">&times;${t.count}</span>
       `;
       topList.appendChild(row);
+    });
+  }
+
+  const partnersPanel = document.getElementById('topPartnersPanel');
+  const partnerList = document.getElementById('topPartnersList');
+  partnerList.innerHTML = '';
+  const partners = report.top_partners || [];
+  if (!partners.length) {
+    partnersPanel.style.display = 'none';
+  } else {
+    partnersPanel.style.display = '';
+    const maxPartnerCount = partners[0].count;
+    partners.forEach((p, i) => {
+      const row = document.createElement('div');
+      row.className = 'top-row';
+      const pct = Math.max(6, Math.round((p.count / maxPartnerCount) * 100));
+      const winRate = p.count ? p.wins / p.count : 0;
+      const barClass = winRate >= 0.5 ? 'W' : 'L';
+      row.innerHTML = `
+        <div class="top-rank">${i + 1}</div>
+        <div class="top-main">
+          <span class="top-score-label">${p.partner}</span>
+          <div class="top-bar-track"><div class="top-bar-fill ${barClass}" style="width:${pct}%"></div></div>
+        </div>
+        <span class="top-wl record">${p.wins}-${p.losses}</span>
+        <span class="top-count">&times;${p.count}</span>
+      `;
+      partnerList.appendChild(row);
     });
   }
 
