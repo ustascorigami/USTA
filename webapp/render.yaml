@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: tennis-scorigami
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --workers 2 --threads 4 --timeout 90
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
