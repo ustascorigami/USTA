@@ -18,6 +18,35 @@ sites. So this ships as a tiny Flask backend (which does the fetching) plus
 a frontend page it serves. It needs to run somewhere with outbound internet
 access — either your own computer, or a small hosting service.
 
+## Set up the database (required)
+
+The leaderboard and the traffic log both need a Postgres database. A free
+one takes a couple of minutes to set up and works the same whether you're
+running locally or deployed:
+
+1. Go to [neon.tech](https://neon.tech) (or [supabase.com](https://supabase.com) —
+   either works, these instructions use Neon) and sign up for free.
+2. Create a new project (any name, any region).
+3. Neon shows you a **connection string** right on the dashboard — something
+   like `postgresql://user:password@ep-xxxx.neon.tech/neondb?sslmode=require`.
+   Copy it.
+4. Set that as an environment variable named `DATABASE_URL`:
+   - **Locally:** `export DATABASE_URL="postgresql://...`" before running
+     `python app.py` (or put it in a `.env` file if you use one).
+   - **On Render:** go to your service → **Environment** → **Add Environment
+     Variable** → key `DATABASE_URL`, value the connection string you copied
+     → Save. Render redeploys automatically. (`render.yaml` already declares
+     this variable as one Render will prompt you for — the actual value
+     never gets committed to the repo.)
+
+The app creates its own tables the first time it starts (`db.init_db()`),
+so there's no separate migration step — just set the connection string and
+run it.
+
+**Never commit or share your `DATABASE_URL`** — it contains your database
+password. It's already covered by `.gitignore` if you put it in a local
+`.env` file.
+
 ## Run it locally
 
 Requires Python 3.9+.
@@ -26,6 +55,7 @@ Requires Python 3.9+.
 cd webapp
 python3 -m venv .venv && source .venv/bin/activate   # optional but recommended
 pip install -r requirements.txt
+export DATABASE_URL="postgresql://..."   # see "Set up the database" above
 python app.py
 ```
 
@@ -77,14 +107,88 @@ Docker container all work the same way — install `requirements.txt` and run
   6-3" on the site) — the W/L column is the only reliable signal, so those
   two set scores get reversed before anything else uses them. Straight-set
   wins and all 3-set (match-tiebreak) matches are already shown correctly.
-- `app.py` — a Flask app with one API route, `POST /api/scorigami`, that
-  takes `{ "input": "<url or player name>", "start_year": 2003, "end_year":
-  2026 }` and returns the computed report as JSON. Results are cached
-  in-memory for 30 minutes per (player, year range) so repeat lookups are
-  instant and polite to tennisrecord.com.
+- `app.py` — a Flask app. `POST /api/scorigami` takes `{ "input": "<url or
+  player name>", "start_year": 2003, "end_year": 2026 }` and returns the
+  computed report as JSON; results are cached in-memory for 30 minutes per
+  (player, year range) so repeat lookups are instant and polite to
+  tennisrecord.com. `GET /api/leaderboard` and `POST /api/leaderboard` back
+  the site-wide leaderboard (see below).
+- `db.py` — Postgres storage for the leaderboard and the traffic log (see
+  below). Needs `DATABASE_URL` set — see "Set up the database" above.
 - `templates/index.html` — the frontend: a lookup form plus the same grid
   visualization from the original tool, now built dynamically from whatever
-  the API returns, with a client-side CSV export of the full match log.
+  the API returns, with a client-side CSV export of the full match log, and
+  the leaderboard panel.
+
+## The leaderboard
+
+Anyone can look themselves up, then click **"Add me to the leaderboard"**
+to post their claimed-score count (out of 196) to a public, site-wide
+ranking. A few deliberate choices:
+
+- **Opt-in, not automatic.** Looking someone else up never adds them to the
+  leaderboard — only the person clicking the button (viewing their own
+  result) does that, and it's a single upsert keyed by name (+ the
+  tennisrecord.com disambiguator, if any), so re-adding yourself later just
+  updates your existing entry rather than creating a duplicate.
+- **Server-verified, not client-submitted.** The submit endpoint doesn't
+  trust numbers sent from the browser — it re-reads the report your browser
+  just computed (from the same 30-minute cache `/api/scorigami` already
+  uses) and takes the claimed count from there, so the leaderboard can't be
+  seeded with spoofed stats.
+- **Incomplete results are rejected.** If tennisrecord.com didn't respond
+  for some seasons during the lookup, the "Add me" button is disabled (with
+  an explanation) rather than letting an undercounted result onto the
+  board.
+
+The leaderboard lives in Postgres now (see "Set up the database" above), so
+it survives redeploys and restarts — unlike an earlier version of this that
+used a local SQLite file, which Render's ephemeral disk would reset on every
+deploy.
+
+**Note:** whether looking someone up adds them automatically, versus staying
+opt-in-only the way it works today, is still an open question — flag it
+whenever you're ready to decide, since it changes what "traffic" on the site
+means for the people who show up in it.
+
+## Traffic / usage log
+
+Every `/api/scorigami` call is logged to a `lookup_events` table: timestamp,
+which player was searched (+ disambiguator and year range), whether it was
+served from the 30-minute cache or freshly fetched, how many matches came
+back, how long it took, and the outcome (`success`, `not_found`,
+`source_unavailable`, or `error`). Logging is fire-and-forget — if it fails
+for any reason, the lookup itself still succeeds; the log entry is just
+skipped.
+
+It also records the visitor's IP address (`client_ip`) — worth knowing
+plainly, since it's the one piece of this that's about *who's* using the
+site rather than *what* they searched, not just something to skim past. For
+a small tool shared with a tennis league that's a pretty ordinary thing to
+log (most sites keep some form of access log), but it's still real data
+about real visitors, so it's worth being upfront with people about it if
+that ever feels relevant.
+
+There's no dashboard for this data yet — query it directly. Neon and
+Supabase both include a free SQL editor in their dashboard; a few useful
+starting queries:
+
+```sql
+-- Most recent lookups
+SELECT created_at, player, disambig, outcome, cache_hit, total_matches, client_ip
+FROM lookup_events ORDER BY created_at DESC LIMIT 50;
+
+-- Most-searched players
+SELECT player, count(*) FROM lookup_events GROUP BY player ORDER BY 2 DESC LIMIT 20;
+
+-- Traffic in the last 24 hours, by outcome
+SELECT outcome, count(*) FROM lookup_events
+WHERE created_at > now() - interval '24 hours' GROUP BY outcome;
+```
+
+`db.get_traffic_summary(hours=24)` in `db.py` returns that same kind of
+rollup as a Python dict, in case you want to wire up a simple `/api/admin/traffic`
+route or a small stats panel later — it's not called from anywhere yet.
 
 ## Notes / limitations
 

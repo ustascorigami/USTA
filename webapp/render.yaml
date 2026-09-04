@@ -8,3 +8,5 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
+      - key: DATABASE_URL
+        sync: false  # set this in the Render dashboard -- your Postgres connection string, never committed here

@@ -317,6 +317,30 @@
   .legend button:hover { color: var(--ink); border-color: var(--muted); }
   .share-status { font-size: 11.5px; color: var(--achieved); min-height: 1em; }
 
+  .leaderboard-cta {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 28px;
+  }
+  #addToLeaderboardBtn {
+    background: var(--clay);
+    color: #fff8f2;
+    border: none;
+    border-radius: 7px;
+    font-family: "Inter", sans-serif;
+    font-weight: 600;
+    font-size: 13.5px;
+    padding: 10px 18px;
+    cursor: pointer;
+    transition: filter 0.1s ease;
+  }
+  #addToLeaderboardBtn:hover { filter: brightness(1.08); }
+  #addToLeaderboardBtn:disabled { opacity: 0.55; cursor: default; filter: none; }
+  .leaderboard-cta-status { font-size: 12.5px; color: var(--ink-2); }
+  .leaderboard-cta-status.err { color: var(--error-ink); }
+  .leaderboard-cta-status.ok { color: var(--achieved); }
+
   .top-panels {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -354,6 +378,9 @@
     border-top: 1px solid var(--line);
   }
   .top-row:first-of-type { border-top: none; }
+  .top-row.clickable { cursor: pointer; border-radius: 6px; }
+  .top-row.clickable:hover { background: var(--surface-2); }
+  .top-row.clickable:focus-visible { outline: 2px solid var(--clay); outline-offset: -2px; }
   .top-rank {
     font-family: "IBM Plex Mono", ui-monospace, monospace;
     font-size: 12px;
@@ -369,6 +396,7 @@
   .top-bar-fill { height: 100%; border-radius: 3px; }
   .top-bar-fill.W { background: var(--court); }
   .top-bar-fill.L { background: var(--clay); }
+  .top-bar-fill.claimed { background: var(--achieved); }
   .top-wl {
     font-family: "IBM Plex Mono", ui-monospace, monospace;
     font-size: 11px;
@@ -532,12 +560,24 @@
     </form>
   </div>
 
+  <div class="top-scores" id="leaderboardPanel">
+    <h2>Leaderboard</h2>
+    <p class="sub">Ranked by standard scores claimed, out of 196. Search yourself above, then add your result below.</p>
+    <div id="leaderboardList"></div>
+    <p class="sub" id="leaderboardEmpty" style="display:none;">Nobody&rsquo;s on the board yet &mdash; search yourself above and be the first.</p>
+  </div>
+
   <div class="status" id="status"><div class="spinner"></div><span id="statusText">Fetching match history from tennisrecord.com&hellip;</span></div>
   <div class="error-box" id="errorBox"></div>
   <div class="warn-box" id="warnBox"></div>
 
   <div id="results">
     <div class="hero" id="hero"></div>
+
+    <div class="leaderboard-cta" id="leaderboardCta">
+      <button type="button" id="addToLeaderboardBtn">Add me to the leaderboard</button>
+      <span class="leaderboard-cta-status" id="leaderboardCtaStatus"></span>
+    </div>
 
     <div class="legend">
       <div class="legend-item"><span class="swatch on win"></span> posted this score (win)</div>
@@ -689,6 +729,18 @@ function renderReport(report) {
     warnBox.classList.add('show');
   } else {
     warnBox.classList.remove('show');
+  }
+
+  const addBtn = document.getElementById('addToLeaderboardBtn');
+  const addStatus = document.getElementById('leaderboardCtaStatus');
+  addStatus.textContent = '';
+  addStatus.className = 'leaderboard-cta-status';
+  if (failedYears.length) {
+    addBtn.disabled = true;
+    addBtn.title = 'Some seasons couldn’t be checked, so this result isn’t complete enough for the leaderboard yet. Try the search again once tennisrecord.com is responding fully.';
+  } else {
+    addBtn.disabled = false;
+    addBtn.title = '';
   }
 
   const g = report.grids;
@@ -931,6 +983,105 @@ document.getElementById('shareBtn').addEventListener('click', async () => {
   }
   runLookup(input, startYear, endYear);
 })();
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = String(s == null ? '' : s);
+  return d.innerHTML;
+}
+
+function renderLeaderboard(entries) {
+  const list = document.getElementById('leaderboardList');
+  const empty = document.getElementById('leaderboardEmpty');
+  list.innerHTML = '';
+  if (!entries || !entries.length) {
+    empty.style.display = '';
+    return;
+  }
+  empty.style.display = 'none';
+  const maxClaimed = entries[0].claimed || 1;
+
+  entries.forEach((e, i) => {
+    const pct = Math.round((e.claimed / e.universe) * 100);
+    const barPct = Math.max(6, Math.round((e.claimed / maxClaimed) * 100));
+    const row = document.createElement('div');
+    row.className = 'top-row clickable';
+    row.tabIndex = 0;
+    row.setAttribute('role', 'button');
+    row.setAttribute('aria-label', `View ${e.player}’s scorigami results`);
+    row.innerHTML = `
+      <div class="top-rank">${i + 1}</div>
+      <div class="top-main">
+        <span class="top-score-label">${escapeHtml(e.player)}</span>
+        <div class="top-bar-track"><div class="top-bar-fill claimed" style="width:${barPct}%"></div></div>
+      </div>
+      <span class="top-wl record">${pct}%</span>
+      <span class="top-count">${e.claimed}/${e.universe}</span>
+    `;
+    const openThisPlayer = () => {
+      document.getElementById('playerInput').value = e.share_query;
+      document.getElementById('startYear').value = e.first_year || 2003;
+      document.getElementById('endYear').value = e.last_year || '';
+      document.querySelector('.advanced').open = true;
+      runLookup(e.share_query, e.first_year, e.last_year);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+    row.addEventListener('click', openThisPlayer);
+    row.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openThisPlayer(); }
+    });
+    list.appendChild(row);
+  });
+}
+
+async function loadLeaderboard() {
+  try {
+    const resp = await fetch('/api/leaderboard');
+    const data = await resp.json();
+    renderLeaderboard(data.entries || []);
+  } catch (err) {
+    // The leaderboard is a nice-to-have -- fail quietly rather than
+    // blocking the rest of the page if it can't be reached.
+  }
+}
+
+document.getElementById('addToLeaderboardBtn').addEventListener('click', async () => {
+  if (!lastReport) return;
+  const btn = document.getElementById('addToLeaderboardBtn');
+  const status = document.getElementById('leaderboardCtaStatus');
+  const hadFetchErrors = Object.keys(lastReport.fetch_errors || {}).length > 0;
+
+  btn.disabled = true;
+  status.textContent = 'Adding…';
+  status.className = 'leaderboard-cta-status';
+
+  try {
+    const resp = await fetch('/api/leaderboard', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        player: lastReport.player,
+        disambig: lastReport.disambig,
+        start_year: lastReport.queried_start_year,
+        end_year: lastReport.queried_end_year,
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      throw new Error(data.error || 'Something went wrong.');
+    }
+    status.textContent = `You're #${data.rank} on the leaderboard!`;
+    status.className = 'leaderboard-cta-status ok';
+    renderLeaderboard(data.entries || []);
+  } catch (err) {
+    status.textContent = err.message || String(err);
+    status.className = 'leaderboard-cta-status err';
+  } finally {
+    btn.disabled = hadFetchErrors;
+  }
+});
+
+loadLeaderboard();
 </script>
 </body>
 </html>
