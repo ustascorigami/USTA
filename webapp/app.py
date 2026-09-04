@@ -5,7 +5,7 @@ import time
 
 from flask import Flask, jsonify, render_template, request
 
-from scorigami_lib import ScorigamiError, build_report, extract_player_query
+from scorigami_lib import ScorigamiError, SourceUnavailableError, build_report, extract_player_query
 
 app = Flask(__name__)
 
@@ -71,6 +71,11 @@ def api_scorigami():
 
     try:
         report = build_report(player, start_year, end_year, disambig=disambig)
+    except SourceUnavailableError as e:
+        # Don't cache this -- it's a transient source problem, not a real
+        # answer, so the next request should try tennisrecord.com again
+        # rather than replaying a stale failure for 30 minutes.
+        return jsonify({"error": str(e)}), 503
     except ScorigamiError as e:
         return jsonify({"error": str(e)}), 404
     except Exception as e:  # noqa: BLE001

@@ -25,6 +25,7 @@ Design notes (carried over from the original single-player tool):
 """
 import datetime
 import re
+import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -49,6 +50,16 @@ LOST_SET = set(LOST)
 
 
 class ScorigamiError(Exception):
+    pass
+
+
+class SourceUnavailableError(ScorigamiError):
+    """
+    Raised instead of the generic ScorigamiError when tennisrecord.com
+    itself failed to answer for most/all of the requested seasons, so the
+    caller can tell "this player has no data" apart from "we couldn't get
+    an answer from the source" (e.g. to use a 503 instead of a 404).
+    """
     pass
 
 
@@ -89,14 +100,36 @@ def extract_player_name(user_input: str) -> str:
     return extract_player_query(user_input)["player"]
 
 
-def fetch_year_html(player: str, year: int, disambig: str = None, timeout: float = 15.0) -> str:
+def fetch_year_html(
+    player: str,
+    year: int,
+    disambig: str = None,
+    timeout: float = 20.0,
+    max_retries: int = 2,
+) -> str:
+    """
+    Fetch one year's match-history page. tennisrecord.com is occasionally
+    slow or briefly unresponsive rather than reliably down, so a single
+    failed attempt isn't treated as conclusive -- this retries transient
+    network errors (timeouts, connection resets, 5xx) a couple of times
+    with a short backoff before giving up on that year.
+    """
     params = {"year": year, "playername": player, "mt": 0, "lt": 0, "yr": 1}
     if disambig:
         params["s"] = disambig
     url = BASE_URL + "?" + urllib.parse.urlencode(params)
-    resp = requests.get(url, headers=HEADERS, timeout=timeout)
-    resp.raise_for_status()
-    return resp.text
+
+    last_exc = None
+    for attempt in range(max_retries + 1):
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=timeout)
+            resp.raise_for_status()
+            return resp.text
+        except requests.exceptions.RequestException as e:
+            last_exc = e
+            if attempt < max_retries:
+                time.sleep(1.5 * (attempt + 1))
+    raise last_exc
 
 
 def _cell_names(cell) -> list:
@@ -172,9 +205,15 @@ def parse_year_matches(html: str, year: int) -> list:
 
 
 def collect_all_years(
-    player: str, start_year: int, end_year: int, disambig: str = None, max_workers: int = 10
+    player: str, start_year: int, end_year: int, disambig: str = None, max_workers: int = 6
 ):
-    """Fetch + parse every year in [start_year, end_year] concurrently."""
+    """
+    Fetch + parse every year in [start_year, end_year] concurrently. Capped
+    at a modest concurrency (rather than one request per year all at once)
+    so a single lookup doesn't look like a burst of traffic to
+    tennisrecord.com -- gentler on their server and less likely to get this
+    app's requests throttled.
+    """
     matches = []
     fetched_years = {}
     errors = {}
@@ -431,7 +470,22 @@ def build_report(player: str, start_year: int, end_year: int, disambig: str = No
         player, start_year, end_year, disambig=disambig
     )
 
+    requested_years = end_year - start_year + 1
+
     if not matches:
+        # An empty result can mean two very different things: the name/URL
+        # genuinely doesn't match anyone, or tennisrecord.com simply didn't
+        # answer for most/all of the seasons we asked about (slow, briefly
+        # down, or throttling us). Telling a user "no matches found" in the
+        # second case is actively misleading, so distinguish them.
+        if errors and len(errors) >= max(1, requested_years - 2):
+            raise SourceUnavailableError(
+                f"tennisrecord.com didn't respond for {len(errors)} of "
+                f"{requested_years} seasons checked, so this search couldn't be "
+                "completed. The site may be slow or temporarily unavailable right "
+                "now (or briefly limiting how fast it'll answer) -- wait a minute "
+                "and try again."
+            )
         hint = (
             " This name matches more than one player on tennisrecord.com and the "
             "disambiguated link didn't return anything either -- try re-pasting the "
