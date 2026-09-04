@@ -302,6 +302,7 @@
     cursor: pointer;
   }
   .legend button:hover { color: var(--ink); border-color: var(--muted); }
+  .share-status { font-size: 11.5px; color: var(--achieved); min-height: 1em; }
 
   .top-panels {
     display: grid;
@@ -528,6 +529,8 @@
       <div class="legend-item"><span class="swatch off"></span> never happened</div>
       <div class="legend-item" style="color:var(--muted)">hover a cell for the date &amp; opponent</div>
       <div class="spacer"></div>
+      <span class="share-status" id="shareStatus"></span>
+      <button type="button" id="shareBtn">Share result</button>
       <button type="button" id="downloadCsv">Download match log (CSV)</button>
     </div>
 
@@ -793,11 +796,7 @@ const statusText = document.getElementById('statusText');
 const errorBox = document.getElementById('errorBox');
 const submitBtn = document.getElementById('submitBtn');
 
-form.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const input = document.getElementById('playerInput').value.trim();
-  const startYear = document.getElementById('startYear').value.trim();
-  const endYear = document.getElementById('endYear').value.trim();
+async function runLookup(input, startYear, endYear) {
   if (!input) return;
 
   errorBox.classList.remove('show');
@@ -817,6 +816,7 @@ form.addEventListener('submit', async (e) => {
       throw new Error(data.error || 'Something went wrong.');
     }
     renderReport(data);
+    updateShareUrl(input, startYear, endYear);
   } catch (err) {
     errorBox.textContent = err.message || String(err);
     errorBox.classList.add('show');
@@ -824,7 +824,85 @@ form.addEventListener('submit', async (e) => {
     statusEl.classList.remove('show');
     submitBtn.disabled = false;
   }
+}
+
+form.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const input = document.getElementById('playerInput').value.trim();
+  const startYear = document.getElementById('startYear').value.trim();
+  const endYear = document.getElementById('endYear').value.trim();
+  runLookup(input, startYear, endYear);
 });
+
+// Keep the address bar in sync with whatever query just rendered, so the
+// current URL is itself a working shareable link back to this exact result.
+function updateShareUrl(input, startYear, endYear) {
+  const params = new URLSearchParams();
+  params.set('input', input);
+  if (startYear) params.set('start', startYear);
+  if (endYear) params.set('end', endYear);
+  const newUrl = window.location.pathname + '?' + params.toString();
+  history.replaceState(null, '', newUrl);
+}
+
+function buildShareText(report) {
+  const s = report.summary;
+  const pct = Math.round((s.claimed / s.universe) * 100);
+  let text = `${report.player} has posted ${s.claimed}/${s.universe} standard tennis scores (${pct}%) since ${report.first_year}.`;
+  const top = report.top_scores && report.top_scores[0];
+  if (top) {
+    text += ` Most common score: ${top.pattern_display} ×${top.count}.`;
+  }
+  return text;
+}
+
+let shareStatusTimer = null;
+function flashShareStatus(msg) {
+  const el = document.getElementById('shareStatus');
+  el.textContent = msg;
+  clearTimeout(shareStatusTimer);
+  shareStatusTimer = setTimeout(() => { el.textContent = ''; }, 4000);
+}
+
+document.getElementById('shareBtn').addEventListener('click', async () => {
+  if (!lastReport) return;
+  const text = buildShareText(lastReport);
+  const url = window.location.href;
+
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: 'Tennis Scorigami', text, url });
+      return;
+    } catch (err) {
+      if (err && err.name === 'AbortError') return; // user backed out of the share sheet
+      // otherwise fall through to the clipboard fallback below
+    }
+  }
+
+  try {
+    await navigator.clipboard.writeText(`${text}\n${url}`);
+    flashShareStatus('Copied! Paste it into a text.');
+  } catch (err) {
+    flashShareStatus('Couldn’t copy — copy the link from your address bar instead.');
+  }
+});
+
+// If this page was opened from a shared link (?input=...), run that lookup
+// automatically instead of waiting for the user to type it in again.
+(function initFromSharedLink() {
+  const params = new URLSearchParams(window.location.search);
+  const input = params.get('input');
+  if (!input) return;
+  const startYear = params.get('start') || '';
+  const endYear = params.get('end') || '';
+  document.getElementById('playerInput').value = input;
+  if (startYear) document.getElementById('startYear').value = startYear;
+  if (endYear) document.getElementById('endYear').value = endYear;
+  if (startYear || endYear) {
+    document.querySelector('.advanced').open = true;
+  }
+  runLookup(input, startYear, endYear);
+})();
 </script>
 </body>
 </html>
