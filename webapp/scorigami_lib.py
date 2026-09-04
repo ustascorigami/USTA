@@ -52,8 +52,18 @@ class ScorigamiError(Exception):
     pass
 
 
-def extract_player_name(user_input: str) -> str:
-    """Accept either a full tennisrecord.com URL or a bare player name."""
+def extract_player_query(user_input: str) -> dict:
+    """
+    Accept either a full tennisrecord.com URL or a bare player name.
+    Returns {"player": str, "disambig": str | None}.
+
+    When multiple players share a name, tennisrecord.com disambiguates them
+    with an "s" query param (e.g. ...&playername=Ryan%20White&s=2...) once
+    you've picked the right one on their site. If a pasted URL carries that
+    param, we carry it through on every year's request so the app pulls the
+    same player's history the user actually landed on, instead of guessing
+    from the bare name.
+    """
     s = (user_input or "").strip()
     if not s:
         raise ScorigamiError("Please enter a tennisrecord.com URL or a player name.")
@@ -68,12 +78,21 @@ def extract_player_name(user_input: str) -> str:
                 "Couldn't find a playername in that URL. Paste the full "
                 "tennisrecord.com match-history link, or just type the player's name."
             )
-        return names[0].strip()
-    return s
+        disambig_vals = qs.get("s")
+        disambig = disambig_vals[0].strip() if disambig_vals and disambig_vals[0].strip() else None
+        return {"player": names[0].strip(), "disambig": disambig}
+    return {"player": s, "disambig": None}
 
 
-def fetch_year_html(player: str, year: int, timeout: float = 15.0) -> str:
+def extract_player_name(user_input: str) -> str:
+    """Back-compat wrapper around extract_player_query: just the name."""
+    return extract_player_query(user_input)["player"]
+
+
+def fetch_year_html(player: str, year: int, disambig: str = None, timeout: float = 15.0) -> str:
     params = {"year": year, "playername": player, "mt": 0, "lt": 0, "yr": 1}
+    if disambig:
+        params["s"] = disambig
     url = BASE_URL + "?" + urllib.parse.urlencode(params)
     resp = requests.get(url, headers=HEADERS, timeout=timeout)
     resp.raise_for_status()
@@ -152,14 +171,16 @@ def parse_year_matches(html: str, year: int) -> list:
     return matches
 
 
-def collect_all_years(player: str, start_year: int, end_year: int, max_workers: int = 10):
+def collect_all_years(
+    player: str, start_year: int, end_year: int, disambig: str = None, max_workers: int = 10
+):
     """Fetch + parse every year in [start_year, end_year] concurrently."""
     matches = []
     fetched_years = {}
     errors = {}
 
     def _one(year):
-        html = fetch_year_html(player, year)
+        html = fetch_year_html(player, year, disambig=disambig)
         return year, parse_year_matches(html, year)
 
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
@@ -405,14 +426,25 @@ def compute_top_partners(matches: list, n: int = 5) -> list:
     ]
 
 
-def build_report(player: str, start_year: int, end_year: int) -> dict:
-    matches, fetched_years, errors = collect_all_years(player, start_year, end_year)
+def build_report(player: str, start_year: int, end_year: int, disambig: str = None) -> dict:
+    matches, fetched_years, errors = collect_all_years(
+        player, start_year, end_year, disambig=disambig
+    )
 
     if not matches:
+        hint = (
+            " This name matches more than one player on tennisrecord.com and the "
+            "disambiguated link didn't return anything either -- try re-pasting the "
+            "exact URL you land on after picking the right player on their site."
+            if disambig
+            else " If tennisrecord.com shows more than one player with this name, "
+            "paste the full match-history URL for the specific one you mean instead "
+            "of just typing the name."
+        )
         raise ScorigamiError(
             f'No matches found for "{player}" between {start_year} and {end_year}. '
             "Double check the player name matches tennisrecord.com exactly "
-            "(first and last name, correct spelling/capitalization)."
+            "(first and last name, correct spelling/capitalization)." + hint
         )
 
     normalize_perspective(matches)
@@ -454,6 +486,7 @@ def build_report(player: str, start_year: int, end_year: int) -> dict:
 
     return {
         "player": player,
+        "disambig": disambig,
         "queried_start_year": start_year,
         "queried_end_year": end_year,
         "first_year": first_year,

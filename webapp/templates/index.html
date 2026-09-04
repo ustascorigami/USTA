@@ -506,7 +506,7 @@
         <input type="text" id="playerInput" placeholder="Paste a tennisrecord.com match-history URL, or type a player name (e.g. Brett Hartig)" autocomplete="off">
         <button type="submit" id="submitBtn">Find scorigami</button>
       </div>
-      <div class="lookup-help">Player names must match tennisrecord.com exactly. This checks every season from the start year below through the present.</div>
+      <div class="lookup-help">Player names must match tennisrecord.com exactly. This checks every season from the start year below through the present. If more than one player shares that name, paste the exact match-history URL for the right one &mdash; the link will keep pointing at that specific player.</div>
       <details class="advanced">
         <summary>Advanced: year range</summary>
         <div class="advanced-row">
@@ -664,7 +664,8 @@ function renderReport(report) {
   const g = report.grids;
   const s = report.summary;
 
-  document.getElementById('heading').textContent = 'Scores ' + report.player + ' Hasn’t Had. Yet.';
+  const disambigSuffix = report.disambig ? ' (tennisrecord.com match #' + report.disambig + ')' : '';
+  document.getElementById('heading').textContent = 'Scores ' + report.player + ' Hasn’t Had. Yet.' + disambigSuffix;
 
   const hero = document.getElementById('hero');
   hero.innerHTML = '';
