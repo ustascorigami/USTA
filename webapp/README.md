@@ -75,7 +75,7 @@ Any host that runs a Python web app works. Two easy free options:
 3. Render will detect `render.yaml` automatically and use it, or manually
    set:
    - Build command: `pip install -r requirements.txt`
-   - Start command: `gunicorn app:app --workers 2 --threads 4 --timeout 90`
+   - Start command: `gunicorn app:app --workers 1 --threads 8 --timeout 90`
 4. Deploy. You'll get a public URL like `https://tennis-scorigami.onrender.com`.
 
 The free tier spins down after inactivity, so the first request after a
@@ -204,3 +204,12 @@ route or a small stats panel later — it's not called from anywhere yet.
   dropped silently.
 - The in-memory cache resets whenever the server restarts (e.g. on a free
   host that spins down when idle) — that's expected and fine.
+- The app must run as a **single worker process** (multiple threads are
+  fine — that's why the start command is `--workers 1 --threads 8`, not
+  multiple workers). The lookup cache and the "add me to the leaderboard"
+  check both live in that process's memory; with more than one worker,
+  each process would have its own separate cache, so a lookup done by one
+  worker wouldn't be visible when the leaderboard submit landed on the
+  other one, causing an intermittent "couldn't find a recent result to
+  add" error. This was caught by testing the deployed site directly —
+  don't raise `--workers` without also moving that cache into Postgres.
